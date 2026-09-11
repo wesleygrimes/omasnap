@@ -10,7 +10,7 @@ namespace {
 /// Physical height of the camera strip on 14"/16" MacBook Pro panels (the
 /// pixels above a 16:10 content rectangle). Converted to logical via scale.
 constexpr int kMacBookNotchPhysicalHeight = 74;
-/// Physical width of the camera housing. Kept tight so the chrome ears sit
+/// Physical width of the camera housing. Kept tight so the tab ears sit
 /// against the cutout rather than leaving a dead band beside it.
 constexpr int kMacBookNotchPhysicalWidth = 370;
 
@@ -74,8 +74,8 @@ TopCutout resolveTopCutout(const DisplayConfig &config,
                                          : defaultNotchWidth(safeScale);
   cutout.height = config.notchHeight > 0.0 ? config.notchHeight
                                            : defaultNotchHeight(safeScale);
-  // Cap so the ears still have room for chrome; a mis-set config should not
-  // collapse both wings to nothing.
+  // Cap so the tab ears still have room; a mis-set config should not
+  // collapse both sides to nothing.
   cutout.width = std::min(cutout.width, overlayWidth * 0.6);
   if (cutout.width <= 0.0)
     cutout = {};

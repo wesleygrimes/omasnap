@@ -164,7 +164,7 @@ bool runDisplayConfigSmoke(QString &error) {
     }
   }
 
-  // Editor toolbar wings clear the cutout; zero cutout stays centered.
+  // Edit toolbar stays centered even when tabs dodge a cutout.
   {
     CaptureData capture;
     capture.previewSize = QSize(1728, 1117);
@@ -175,53 +175,21 @@ bool runDisplayConfigSmoke(QString &error) {
     capture.source.fill(Qt::black);
     CaptureEditor editor(capture);
     editor.resize(1728, 1117);
-    editor.setTopCutoutForTest({});
-
-    const QVector<QRectF> centered = editor.toolbarButtonRectsForTest();
-    if (centered.size() < 20) {
-      error = QStringLiteral("expected the full toolbar button set");
-      return false;
-    }
-    const qreal left = centered.constFirst().left();
-    const qreal right = centered.constLast().right();
-    const qreal mid = (left + right) / 2.0;
-    if (!nearlyEqual(mid, editor.width() / 2.0, 2.0)) {
-      error = QStringLiteral("zero-cutout toolbar is not centered");
-      return false;
-    }
 
     TopCutout cutout;
     cutout.width = 240;
     cutout.height = 37;
     editor.setTopCutoutForTest(cutout);
-    const QRectF exclusion = topCutoutRect(QRectF(editor.rect()), cutout);
-    const QVector<QRectF> split = editor.toolbarButtonRectsForTest();
-    if (split.size() != centered.size()) {
-      error = QStringLiteral("cutout changed toolbar button count");
+    const QVector<QRectF> buttons = editor.toolbarButtonRectsForTest();
+    if (buttons.size() < 20) {
+      error = QStringLiteral("expected the full toolbar button set");
       return false;
     }
-    for (const QRectF &rect : split) {
-      if (intersectsCutout(rect, exclusion)) {
-        error = QStringLiteral("toolbar button intersects the cutout");
-        return false;
-      }
-    }
-    // Shared wing scale: every primary button is the same height.
-    const qreal barHeight = split.constFirst().height();
-    for (const QRectF &rect : split) {
-      if (!nearlyEqual(rect.height(), barHeight, 0.01)) {
-        error = QStringLiteral("toolbar wings do not share one scale");
-        return false;
-      }
-    }
-    // Actions live on the right wing: close should be right of the cutout.
-    const QRectF closeRect = split.constLast();
-    if (closeRect.left() <= exclusion.right()) {
-      error = QStringLiteral("close action is not in the right ear");
-      return false;
-    }
-    if (split.constFirst().right() >= exclusion.left()) {
-      error = QStringLiteral("undo action is not in the left ear");
+    const qreal left = buttons.constFirst().left();
+    const qreal right = buttons.constLast().right();
+    const qreal mid = (left + right) / 2.0;
+    if (!nearlyEqual(mid, editor.width() / 2.0, 2.0)) {
+      error = QStringLiteral("toolbar should stay centered with a cutout");
       return false;
     }
   }

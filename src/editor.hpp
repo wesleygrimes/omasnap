@@ -94,7 +94,7 @@ public:
   [[nodiscard]] QString measurementText() const;
   /** Current monitor data (background capture may be in flight). */
   const CaptureData &captureData() const { return capture_; }
-  /** Active top cutout used for tab/toolbar layout (tests). */
+  /** Active top cutout used for capture-tab layout (tests). */
   [[nodiscard]] TopCutout topCutoutForTest() const { return topCutout_; }
   /** Overrides the resolved cutout (tests). */
   void setTopCutoutForTest(TopCutout cutout);
