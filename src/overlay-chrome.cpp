@@ -77,7 +77,8 @@ QColor captureTabAccent(CaptureKind kind) {
 }
 } // namespace
 
-QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
+QVector<CaptureTab> captureTabLayout(const QRect &bounds,
+                                     const TopCutout &cutout) {
   static const CaptureKind order[] = {CaptureKind::Region, CaptureKind::Window,
                                       CaptureKind::Scroll,
                                       CaptureKind::Fullscreen};
@@ -85,21 +86,51 @@ QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
   constexpr qreal kPad = 14.0;
   constexpr qreal kGap = 2.0;
   constexpr qreal kHeight = 26.0;
-  // Flush to the top edge (see drawCaptureTabs' -30 background extension):
-  // derived from kCaptureTabBarBottom rather than a separate magic number,
-  // so the two can't drift apart.
-  constexpr qreal kTop = kCaptureTabBarBottom - kHeight - 5.0;
+  // Label sits kTabBarLabelPad below the top of the metric bar so it reads
+  // centered; the matching bottom pad in drawCaptureTabs keeps the painted
+  // wrapper on kCaptureTabBarBottom.
+  constexpr qreal kTop = kCaptureTabBarBottom - kHeight - kTabBarLabelPad;
   QVector<CaptureTab> tabs;
+  qreal widths[4];
   qreal total = 0.0;
-  for (const CaptureKind kind : order) {
-    const qreal w = metrics.horizontalAdvance(captureTabLabel(kind)) + 2 * kPad;
-    tabs.push_back({kind, QRectF(total, kTop, w, kHeight)});
-    total += w + kGap;
+  for (int index = 0; index < 4; ++index) {
+    widths[index] =
+        metrics.horizontalAdvance(captureTabLabel(order[index])) + 2 * kPad;
+    total += widths[index] + kGap;
   }
   total -= kGap;
-  const qreal left = bounds.left() + (bounds.width() - total) / 2.0;
-  for (CaptureTab &tab : tabs)
-    tab.rect.translate(left, 0);
+
+  auto placeCluster = [&](int begin, int end, qreal left) {
+    qreal x = left;
+    for (int index = begin; index < end; ++index) {
+      tabs.push_back(
+          {order[index], QRectF(x, kTop, widths[index], kHeight)});
+      x += widths[index] + kGap;
+    }
+  };
+
+  if (cutout.width <= 0.0) {
+    placeCluster(0, 4, bounds.left() + (bounds.width() - total) / 2.0);
+    return tabs;
+  }
+
+  const QRectF exclusion = topCutoutRect(QRectF(bounds), cutout);
+  const qreal leftWidth = widths[0] + kGap + widths[1];
+  const qreal rightWidth = widths[2] + kGap + widths[3];
+  qreal leftStart = exclusion.left() - leftWidth;
+  qreal rightStart = exclusion.right();
+  constexpr qreal kSideMargin = 8.0;
+  leftStart = std::max(bounds.left() + kSideMargin, leftStart);
+  if (rightStart + rightWidth > bounds.right() - kSideMargin)
+    rightStart = bounds.right() - kSideMargin - rightWidth;
+  // If the ears collide (tiny overlay / huge cutout), fall back to the
+  // centered strip so tabs stay usable.
+  if (leftStart + leftWidth > rightStart) {
+    placeCluster(0, 4, bounds.left() + (bounds.width() - total) / 2.0);
+    return tabs;
+  }
+  placeCluster(0, 2, leftStart);
+  placeCluster(2, 4, rightStart);
   return tabs;
 }
 
@@ -116,13 +147,70 @@ void drawCaptureTabs(QPainter &painter, const QVector<CaptureTab> &tabs,
   if (tabs.isEmpty())
     return;
   // Hangs off the top edge like a tab strip: square at the top (drawn past
-  // the edge so only the bottom corners round), not a floating pill.
-  const QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
-                         .adjusted(-5, -30, 5, 5);
-  painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
-  painter.setBrush(QColor(18, 18, 22, 235));
-  painter.drawRoundedRect(bar, 12, 12);
+  // the edge so only the bottom corners round), not a floating pill. Split
+  // ears keep the notch-facing edge square so they meet the housing cleanly.
+  constexpr qreal kJoinSlop = 6.0;
+  constexpr qreal kRadius = 12.0;
   painter.setFont(captureTabFont());
+  const bool split = tabs.size() >= 2 &&
+                     tabs.constLast().rect.left() -
+                             tabs.constFirst().rect.right() >
+                         kJoinSlop;
+  int clusterStart = 0;
+  int clusterIndex = 0;
+  while (clusterStart < tabs.size()) {
+    int clusterEnd = clusterStart;
+    while (clusterEnd + 1 < tabs.size() &&
+           tabs.at(clusterEnd + 1).rect.left() -
+                   tabs.at(clusterEnd).rect.right() <=
+               kJoinSlop)
+      ++clusterEnd;
+    QRectF bar = tabs.at(clusterStart)
+                     .rect.united(tabs.at(clusterEnd).rect)
+                     .adjusted(-5, -30, 5, kTabBarLabelPad);
+    // Reach a couple of pixels into the cutout so the ear and housing share
+    // an edge instead of leaving a hairline gap from antialiasing.
+    if (split) {
+      if (clusterIndex == 0)
+        bar.setRight(bar.right() + 3.0);
+      else
+        bar.setLeft(bar.left() - 3.0);
+    }
+    // Centered strip keeps a faint edge so it reads as chrome over the dim.
+    // Notch ears drop the stroke so they read as continuous with the menu bar.
+    if (split)
+      painter.setPen(Qt::NoPen);
+    else
+      painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
+    painter.setBrush(QColor(18, 18, 22, 235));
+    if (!split) {
+      painter.drawRoundedRect(bar, kRadius, kRadius);
+    } else {
+      const bool outerLeft = clusterIndex == 0;
+      QPainterPath path;
+      const qreal l = bar.left();
+      const qreal t = bar.top();
+      const qreal r = bar.right();
+      const qreal b = bar.bottom();
+      path.moveTo(l, t);
+      path.lineTo(r, t);
+      if (outerLeft) {
+        path.lineTo(r, b);
+        path.lineTo(l + kRadius, b);
+        path.quadTo(l, b, l, b - kRadius);
+        path.lineTo(l, t);
+      } else {
+        path.lineTo(r, b - kRadius);
+        path.quadTo(r, b, r - kRadius, b);
+        path.lineTo(l, b);
+        path.lineTo(l, t);
+      }
+      path.closeSubpath();
+      painter.drawPath(path);
+    }
+    clusterStart = clusterEnd + 1;
+    ++clusterIndex;
+  }
   const int hovered = captureTabAt(tabs, cursor);
   for (int index = 0; index < tabs.size(); ++index) {
     const CaptureTab &tab = tabs.at(index);

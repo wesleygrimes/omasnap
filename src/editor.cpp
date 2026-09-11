@@ -3,6 +3,7 @@
 #include "editor.hpp"
 
 #include "stitch.hpp"
+#include "display-config.hpp"
 #include "icons.hpp"
 #include "eyedropper.hpp"
 #include "output-config.hpp"
@@ -81,6 +82,15 @@ constexpr qreal kTabToolbarGap = 8.0;
 /// three 10px additions, keeping the existing 840px toolbar envelope and,
 /// crucially, the canvas fit geometry derived from its scale.
 constexpr qreal kToolbarGroupGap = 10;
+/// Natural width of the left wing (history + style + tools) at scale 1:
+/// sixteen 36px buttons, fifteen 2.5px gaps, two inter-group gaps. Must match
+/// the Spec catalog in toolbarButtons().
+constexpr qreal kToolbarLeftNatural =
+    16 * 36 + 15 * 2.5 + 2 * kToolbarGroupGap;
+/// Natural width of the right wing (pin / copy / both / save / close) at
+/// scale 1. Must match the Spec catalog in toolbarButtons().
+constexpr qreal kToolbarRightNatural =
+    (36 + 36 + 40 + 36 + 36) + 4 * 2.5;
 constexpr qreal kMinimumRedactionExtent = 5.0;
 constexpr int kBackdropDim = 143;
 
@@ -214,6 +224,54 @@ qreal toolbarScale(qreal availableWidth) {
   return std::min<qreal>(
       1.0,
       std::max<qreal>(0.1, (availableWidth - sideMargins) / kToolbarWidth));
+}
+
+qreal toolbarScaleForWidth(qreal availableWidth, qreal naturalWidth) {
+  constexpr qreal sideMargins = 8.0;
+  if (naturalWidth <= 0.0)
+    return 1.0;
+  return std::min<qreal>(
+      1.0, std::max<qreal>(0.1, (availableWidth - sideMargins) / naturalWidth));
+}
+
+/// Placement for the toolbar row: one shared scale, optionally split into
+/// left/right ears around a top cutout. Collision falls back to centered.
+struct ToolbarLayout {
+  qreal scale = 1.0;
+  bool split = false;
+  qreal leftStart = 0.0;
+  qreal rightStart = 0.0;
+};
+
+ToolbarLayout resolveToolbarLayout(qreal surfaceWidth, const TopCutout &cutout) {
+  ToolbarLayout layout;
+  layout.scale = toolbarScale(surfaceWidth);
+  if (cutout.width <= 0.0 || surfaceWidth <= 0.0)
+    return layout;
+  const QRectF exclusion =
+      topCutoutRect(QRectF(0, 0, surfaceWidth, 1), cutout);
+  constexpr qreal kSideMargin = 8.0;
+  const qreal leftAvailable =
+      std::max<qreal>(1.0, exclusion.left() - kSideMargin);
+  const qreal rightAvailable =
+      std::max<qreal>(1.0, surfaceWidth - kSideMargin - exclusion.right());
+  const qreal splitScale =
+      std::min(toolbarScaleForWidth(leftAvailable, kToolbarLeftNatural),
+               toolbarScaleForWidth(rightAvailable, kToolbarRightNatural));
+  const qreal leftWidth = kToolbarLeftNatural * splitScale;
+  const qreal rightWidth = kToolbarRightNatural * splitScale;
+  qreal leftStart = exclusion.left() - leftWidth;
+  qreal rightStart = exclusion.right();
+  leftStart = std::max<qreal>(kSideMargin, leftStart);
+  if (rightStart + rightWidth > surfaceWidth - kSideMargin)
+    rightStart = surfaceWidth - kSideMargin - rightWidth;
+  if (leftStart + leftWidth > rightStart)
+    return layout;
+  layout.scale = splitScale;
+  layout.split = true;
+  layout.leftStart = leftStart;
+  layout.rightStart = rightStart;
+  return layout;
 }
 // A spotlight at 1x is not a failed zoom, it is a plain highlight: the dimming
 // still isolates the region. Name that state so it reads as somewhere to stop
@@ -634,6 +692,17 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   startupTimingMark("palette config loaded");
   customColor_ = paletteConfig_.custom;
   backgroundConfig_ = loadBackgroundConfig(defaultConfigPath());
+  {
+    const DisplayConfig displayConfig = loadDisplayConfig(defaultConfigPath());
+    const qreal overlayWidth =
+        capture_.previewSize.width() > 0
+            ? capture_.previewSize.width()
+            : (capture_.monitor.geometry.width() > 0
+                   ? capture_.monitor.geometry.width()
+                   : 0.0);
+    topCutout_ = resolveTopCutout(displayConfig, capture_.monitor.pixelSize,
+                                  capture_.monitor.scale, overlayWidth);
+  }
   connect(&backdropWatcher_, &QFutureWatcher<QImage>::finished, this,
           [this] { completeBackdropLoad(); });
   connect(&highlighterProbeWatcher_,
@@ -1802,14 +1871,13 @@ qreal CaptureEditor::toolbarTop() const {
 }
 
 qreal CaptureEditor::imageTopMargin() const {
-  // The toolbar's own height (it scales with width, see toolbarScale) plus
-  // the gap below it: the real, current height of everything stacked above
-  // the image, not a guessed constant. The image shrinks to fit under it on
-  // any window size, small ones included. Rounded to a whole pixel: a
-  // fractional margin puts the image at a fractional offset even at scale 1,
-  // which is needless sub-pixel blur for no visual benefit.
-  return std::round(toolbarTop() + 36.0 * toolbarScale(width()) +
-                    kToolbarImageGap);
+  // The toolbar's own height (shared layout scale × 36) plus the gap below
+  // it: the real height of everything stacked above the image. Rounded to a
+  // whole pixel to avoid needless sub-pixel blur.
+  return std::round(
+      toolbarTop() +
+      36.0 * resolveToolbarLayout(width(), topCutout_).scale +
+      kToolbarImageGap);
 }
 
 QRectF CaptureEditor::baseImageRect() const {
@@ -2195,94 +2263,131 @@ QVector<CaptureEditor::ToolbarButton>
 CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers,
                               bool includeSubmenus) const {
   QVector<ToolbarButton> buttons;
-  const qreal scale = toolbarScale(width());
-  const qreal height = 36 * scale;
-  const qreal gap = 2.5 * scale;
-  const qreal groupGap = kToolbarGroupGap * scale;
-  const qreal total = kToolbarWidth * scale;
-  qreal x = (width() - total) / 2.0;
   const qreal y = toolbarTop();
-  auto add = [&](qreal buttonWidth, QString action, QString label,
-                 QString tooltip, QColor color = {}) {
-    const qreal scaledWidth = buttonWidth * scale;
-    buttons.push_back({QRectF(x, y, scaledWidth, height), std::move(action),
-                       std::move(label), std::move(tooltip), color});
-    x += scaledWidth + gap;
-  };
-  /// Marks the end of a logical cluster: widens the trailing gap and, when
-  /// the caller wants dividers drawn, records the gap's midpoint.
-  auto endGroup = [&]() {
-    if (groupDividers)
-      groupDividers->push_back(x - gap + groupGap / 2.0);
-    x += groupGap;
-  };
-
-  // History: undo/redo together, leading the bar.
-  add(36, QStringLiteral("undo"), {}, QStringLiteral("Undo · Ctrl+Z"));
-  add(36, QStringLiteral("redo"), {},
-      QStringLiteral("Redo · Ctrl+Shift+Z / Ctrl+Y"));
-  endGroup();
-
-  // Style: canvas backdrop and annotation color.
-  add(36, QStringLiteral("background"), {},
-      QStringLiteral("Cycle backdrop · B"));
-  add(36, QStringLiteral("palette"), {}, QStringLiteral("Annotation color"),
-      annotationColor());
-  endGroup();
-
-  // Tools: everything that acts on the image via the cursor.
-  add(36, QStringLiteral("tool-select"), {},
-      QStringLiteral("Select/move · V · Ctrl+wheel zoom · outer handles crop"));
-  add(36, QStringLiteral("tool-arrow"), {},
-      QStringLiteral("Arrow · A · Shift snaps 45° · Size %1 · Wheel")
-          .arg(qRound(annotationSize_)));
-  add(36, QStringLiteral("tool-line"), {},
-      QStringLiteral("Line · L · Shift snaps 45° · Size %1 · Wheel")
-          .arg(qRound(annotationSize_)));
-  add(36, QStringLiteral("tool-freehand"), {},
-      QStringLiteral("Freehand · F · Size %1 · Wheel")
-          .arg(qRound(annotationSize_)));
-  add(36, QStringLiteral("tool-highlighter"), {}, highlighterTooltip());
-  add(36, QStringLiteral("tool-marker"), {},
-      QStringLiteral("Number marker · C · Size %1 · Wheel")
-          .arg(qRound(annotationSize_)));
   const QString fillHint = fillShapes_ ? QStringLiteral("filled") : QString();
   const bool ellipseSelected = tool_ == Tool::Ellipse;
-  add(36, ellipseSelected ? QStringLiteral("tool-ellipse")
-                          : QStringLiteral("tool-rectangle"),
-      fillHint,
-      QStringLiteral("Shapes · R rectangle · E ellipse · hover for fill"));
-  add(36, QStringLiteral("tool-spotlight"), {},
-      QStringLiteral("Spotlight · S · %1 · %2× · S cycles shape")
-          .arg(spotlightShape_ == SpotlightShape::Ellipse
-                   ? QStringLiteral("ellipse")
-                   : spotlightShape_ == SpotlightShape::Rectangle
-                         ? QStringLiteral("rectangle")
-                         : QStringLiteral("rounded"))
-          .arg(spotlightMagnification_, 0, 'f', 1));
-  add(36, QStringLiteral("tool-redact"), {},
-      QStringLiteral("Redact · D · %1 · D again toggles")
-          .arg(redactionStyleName(redactionStyle_)));
-  add(36, QStringLiteral("tool-cut"), {},
-      QStringLiteral("Cut out a band · X · drag across"));
-  add(36, QStringLiteral("tool-text"), {},
-      QStringLiteral("%1 text · T · %2 · %3 · T again cycles style · "
-                     "Shift+T cycles font · Wheel")
-          .arg(annotationTextFontName(textFont_))
-          .arg(QString::fromLatin1(
-              kTextSizeNames.at(static_cast<std::size_t>(textSizeIndex_))))
-          .arg(textBackgroundName(textBackground_)));
-  add(36, QStringLiteral("tool-ocr"), {},
-      QStringLiteral("Copy all text in the image · O"));
-  endGroup();
 
-  // Actions: pin and finish/exit the capture.
-  add(36, QStringLiteral("pin"), {},
-      QStringLiteral("Pin on screen · P · Ctrl+C on the pin copies it"));
-  add(36, QStringLiteral("copy"), {}, QStringLiteral("Copy only · Ctrl+C"));
-  add(40, QStringLiteral("both"), {}, QStringLiteral("Copy and save · Enter"));
-  add(36, QStringLiteral("save"), {}, QStringLiteral("Save only · Ctrl+S"));
-  add(36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc twice"));
+  struct Spec {
+    qreal width;
+    QString action;
+    QString label;
+    QString tooltip;
+    QColor color;
+    bool endGroup = false;
+    bool rightWing = false;
+  };
+
+  const QVector<Spec> specs = {
+      {36, QStringLiteral("undo"), {}, QStringLiteral("Undo · Ctrl+Z"), {}},
+      {36, QStringLiteral("redo"), {},
+       QStringLiteral("Redo · Ctrl+Shift+Z / Ctrl+Y"), {}, true},
+      {36, QStringLiteral("background"), {},
+       QStringLiteral("Cycle backdrop · B"), {}},
+      {36, QStringLiteral("palette"), {}, QStringLiteral("Annotation color"),
+       annotationColor(), true},
+      {36, QStringLiteral("tool-select"), {},
+       QStringLiteral(
+           "Select/move · V · Ctrl+wheel zoom · outer handles crop"),
+       {}},
+      {36, QStringLiteral("tool-arrow"), {},
+       QStringLiteral("Arrow · A · Shift snaps 45° · Size %1 · Wheel")
+           .arg(qRound(annotationSize_)),
+       {}},
+      {36, QStringLiteral("tool-line"), {},
+       QStringLiteral("Line · L · Shift snaps 45° · Size %1 · Wheel")
+           .arg(qRound(annotationSize_)),
+       {}},
+      {36, QStringLiteral("tool-freehand"), {},
+       QStringLiteral("Freehand · F · Size %1 · Wheel")
+           .arg(qRound(annotationSize_)),
+       {}},
+      {36, QStringLiteral("tool-highlighter"), {}, highlighterTooltip(), {}},
+      {36, QStringLiteral("tool-marker"), {},
+       QStringLiteral("Number marker · C · Size %1 · Wheel")
+           .arg(qRound(annotationSize_)),
+       {}},
+      {36,
+       ellipseSelected ? QStringLiteral("tool-ellipse")
+                       : QStringLiteral("tool-rectangle"),
+       fillHint,
+       QStringLiteral("Shapes · R rectangle · E ellipse · hover for fill"),
+       {}},
+      {36, QStringLiteral("tool-spotlight"), {},
+       QStringLiteral("Spotlight · S · %1 · %2× · S cycles shape")
+           .arg(spotlightShape_ == SpotlightShape::Ellipse
+                    ? QStringLiteral("ellipse")
+                    : spotlightShape_ == SpotlightShape::Rectangle
+                          ? QStringLiteral("rectangle")
+                          : QStringLiteral("rounded"))
+           .arg(spotlightMagnification_, 0, 'f', 1),
+       {}},
+      {36, QStringLiteral("tool-redact"), {},
+       QStringLiteral("Redact · D · %1 · D again toggles")
+           .arg(redactionStyleName(redactionStyle_)),
+       {}},
+      {36, QStringLiteral("tool-cut"), {},
+       QStringLiteral("Cut out a band · X · drag across"), {}},
+      {36, QStringLiteral("tool-text"), {},
+       QStringLiteral("%1 text · T · %2 · %3 · T again cycles style · "
+                      "Shift+T cycles font · Wheel")
+           .arg(annotationTextFontName(textFont_))
+           .arg(QString::fromLatin1(
+               kTextSizeNames.at(static_cast<std::size_t>(textSizeIndex_))))
+           .arg(textBackgroundName(textBackground_)),
+       {}},
+      {36, QStringLiteral("tool-ocr"), {},
+       QStringLiteral("Copy all text in the image · O"), {}, true},
+      {36, QStringLiteral("pin"), {},
+       QStringLiteral("Pin on screen · P · Ctrl+C on the pin copies it"),
+       {}, false, true},
+      {36, QStringLiteral("copy"), {}, QStringLiteral("Copy only · Ctrl+C"),
+       {}, false, true},
+      {40, QStringLiteral("both"), {}, QStringLiteral("Copy and save · Enter"),
+       {}, false, true},
+      {36, QStringLiteral("save"), {}, QStringLiteral("Save only · Ctrl+S"),
+       {}, false, true},
+      {36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc twice"),
+       {}, false, true},
+  };
+
+  auto placeSlice = [&](const QVector<Spec> &slice, qreal startX, qreal scale) {
+    qreal x = startX;
+    const qreal height = 36 * scale;
+    const qreal gap = 2.5 * scale;
+    const qreal groupGap = kToolbarGroupGap * scale;
+    for (int index = 0; index < slice.size(); ++index) {
+      const Spec &spec = slice.at(index);
+      const qreal scaledWidth = spec.width * scale;
+      buttons.push_back({QRectF(x, y, scaledWidth, height), spec.action,
+                         spec.label, spec.tooltip, spec.color});
+      x += scaledWidth + gap;
+      if (index + 1 >= slice.size())
+        break;
+      if (spec.endGroup) {
+        if (groupDividers)
+          groupDividers->push_back(x - gap + groupGap / 2.0);
+        x += groupGap;
+      }
+    }
+  };
+
+  QVector<Spec> leftSpecs;
+  QVector<Spec> rightSpecs;
+  for (const Spec &spec : specs) {
+    if (spec.rightWing)
+      rightSpecs.push_back(spec);
+    else
+      leftSpecs.push_back(spec);
+  }
+
+  const ToolbarLayout layout = resolveToolbarLayout(width(), topCutout_);
+  if (!layout.split) {
+    const qreal total = kToolbarWidth * layout.scale;
+    placeSlice(specs, (width() - total) / 2.0, layout.scale);
+  } else {
+    placeSlice(leftSpecs, layout.leftStart, layout.scale);
+    placeSlice(rightSpecs, layout.rightStart, layout.scale);
+  }
 
   if (includeSubmenus && shapeMenuOpen_) {
     const QRectF menu = shapeMenuRect();
@@ -2295,7 +2400,8 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers,
     buttons.push_back({{menu.left() + 76, menu.top() + 4, 32, 28},
                        QStringLiteral("shape-fill"),
                        fillShapes_ ? QStringLiteral("filled") : QString(),
-                       QStringLiteral("Toggle filled or outlined shapes"), {}});
+                       QStringLiteral("Toggle filled or outlined shapes"),
+                       {}});
   }
   if (includeSubmenus && colorPaletteOpen_) {
     const QRectF palette = colorPaletteRect();
@@ -2326,6 +2432,18 @@ QRectF CaptureEditor::toolbarButtonRect(const QString &action) const {
       return button.rect;
   }
   return {};
+}
+
+void CaptureEditor::setTopCutoutForTest(TopCutout cutout) {
+  topCutout_ = std::move(cutout);
+  update();
+}
+
+QVector<QRectF> CaptureEditor::toolbarButtonRectsForTest() const {
+  QVector<QRectF> rects;
+  for (const ToolbarButton &button : toolbarButtons(nullptr, false))
+    rects.push_back(button.rect);
+  return rects;
 }
 
 void CaptureEditor::setStatus(QString status) {
@@ -5463,7 +5581,7 @@ QVector<CaptureTab> CaptureEditor::selectTabItems() const {
   // to the select phase in that mode. A file has no screen to go back to.
   if (capture_.source.isNull() || (phase_ == Phase::Edit && !hasLiveScreen()))
     return {};
-  return captureTabLayout(rect());
+  return captureTabLayout(rect(), topCutout_);
 }
 
 int CaptureEditor::selectTabAt(const QPointF &position) const {
@@ -5554,7 +5672,7 @@ void CaptureEditor::startScrollCapture(const QRect &region) {
   windowMode_ = false;
   dragging_ = false;
   selection_ = {};
-  auto *panel = new ScrollCapturePanel(liveMonitor_, layer_, this);
+  auto *panel = new ScrollCapturePanel(liveMonitor_, layer_, topCutout_, this);
   scrollPanel_ = panel;
   connect(panel, &ScrollCapturePanel::stitched, this,
           [this](const QImage &image) {
@@ -6600,8 +6718,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   QVector<qreal> toolbarDividers;
   const QVector<ToolbarButton> buttons = toolbarButtons(&toolbarDividers);
   if (!toolbarDividers.isEmpty()) {
-    const qreal scale = toolbarScale(width());
-    const qreal barHeight = 36 * scale;
+    const qreal barHeight = 36 * resolveToolbarLayout(width(), topCutout_).scale;
     const qreal barY = toolbarTop();
     painter.setPen(QPen(QColor(255, 255, 255, 30), 1));
     for (const qreal dividerX : std::as_const(toolbarDividers))

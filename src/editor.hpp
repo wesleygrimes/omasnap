@@ -3,6 +3,7 @@
 #include "background-config.hpp"
 #include "capture.hpp"
 #include "cut.hpp"
+#include "display-config.hpp"
 #include "overlay-chrome.hpp"
 #include "palette-config.hpp"
 #include "recent-snaps.hpp"
@@ -93,6 +94,12 @@ public:
   [[nodiscard]] QString measurementText() const;
   /** Current monitor data (background capture may be in flight). */
   const CaptureData &captureData() const { return capture_; }
+  /** Active top cutout used for tab/toolbar layout (tests). */
+  [[nodiscard]] TopCutout topCutoutForTest() const { return topCutout_; }
+  /** Overrides the resolved cutout (tests). */
+  void setTopCutoutForTest(TopCutout cutout);
+  /** Toolbar button hit rects in widget space (tests). */
+  [[nodiscard]] QVector<QRectF> toolbarButtonRectsForTest() const;
   [[nodiscard]] QRectF currentSelection() const { return selection_; }
   /** Annotation-space canvas, including any strips grown past the source. */
   [[nodiscard]] QRectF currentCanvasForTest() const { return canvasRect_; }
@@ -697,6 +704,8 @@ private:
   int hoveredWindow_ = -1;
   int colorIndex_ = 0;
   PaletteConfig paletteConfig_ = defaultPaletteConfig();
+  /// Centered top exclusion for notched panels; width 0 keeps centered chrome.
+  TopCutout topCutout_;
   QColor customColor_;
   qreal customHue_ = 0.98;
   int nextMarker_ = 1;

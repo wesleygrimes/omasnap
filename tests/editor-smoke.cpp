@@ -11,6 +11,7 @@
 #include "recent-snaps.hpp"
 #include "instance-lock-smoke.hpp"
 #include "palette-config-smoke.hpp"
+#include "display-config-smoke.hpp"
 #include "pin-layout-smoke.hpp"
 #include "stitch-smoke.hpp"
 #include "stitch.hpp"
@@ -8988,6 +8989,12 @@ int main(int argc, char **argv) {
   QString paletteError;
   if (!runPaletteConfigSmoke(paletteError)) {
     qWarning().noquote() << "palette config smoke failed:" << paletteError;
+    return EXIT_FAILURE;
+  }
+
+  QString displayError;
+  if (!runDisplayConfigSmoke(displayError)) {
+    qWarning().noquote() << "display config smoke failed:" << displayError;
     return EXIT_FAILURE;
   }
 

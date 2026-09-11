@@ -14,6 +14,7 @@
 
 #include "auto-capture.hpp"
 #include "capture.hpp"
+#include "display-config.hpp"
 #include "overlay-chrome.hpp"
 #include "stitch.hpp"
 
@@ -84,9 +85,10 @@ class ScrollCapturePanel final : public QWidget {
 public:
   /// `layer` is the surface the editor lives on; the panel toggles its
   /// keyboard interactivity and input mask while it is up and restores both
-  /// on destruction. Null (headless tests) leaves both alone.
+  /// on destruction. Null (headless tests) leaves both alone. `cutout` is
+  /// the editor's top exclusion so the tab strip matches.
   ScrollCapturePanel(MonitorInfo monitor, LayerShellQt::Window *layer,
-                     QWidget *parent);
+                     TopCutout cutout = {}, QWidget *parent = nullptr);
   ~ScrollCapturePanel() override;
   /// Take over with `region` (logical surface pixels, clamped to the
   /// surface and the chrome strip) already drawn. Call once, after show().
@@ -163,6 +165,7 @@ private:
   [[nodiscard]] std::pair<int, int> autoScrollParkPoint() const;
   /// Rects the overlay must keep taking clicks in the current phase.
   [[nodiscard]] QVector<QRect> chromeRects() const;
+  [[nodiscard]] QVector<CaptureTab> tabItems() const;
   void setStatus(const QString &status, bool warning = false);
   [[nodiscard]] QRect regionPhysical() const;
   [[nodiscard]] QRect doneButtonRect() const;
@@ -203,6 +206,7 @@ private:
 
   MonitorInfo monitor_;
   LayerShellQt::Window *layer_ = nullptr;
+  TopCutout topCutout_;
   Phase phase_ = Phase::Selected;
   /// Last pointer position, for the tab strip's hover hint.
   QPoint cursor_;

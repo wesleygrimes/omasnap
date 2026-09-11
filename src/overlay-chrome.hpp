@@ -4,6 +4,8 @@
  *  are drawn by the same code rather than by two that drift apart. */
 #pragma once
 
+#include "display-config.hpp"
+
 #include <QColor>
 #include <QPair>
 #include <QRect>
@@ -45,9 +47,15 @@ struct CaptureTab {
 /// window size, since only the horizontal layout changes with the surface.
 /// Chrome stacked below the strip anchors to this, not a guessed constant.
 constexpr qreal kCaptureTabBarBottom = 31.0;
+/// Padding above the tab label and below it inside the hanging bar. One
+/// value for both so the painted wrapper always ends on
+/// `kCaptureTabBarBottom` (top inset + label height + bottom pad).
+constexpr qreal kTabBarLabelPad = 3.0;
 [[nodiscard]] QString captureTabLabel(CaptureKind kind);
 /// Tab positions for a surface of `bounds`, hanging off the top edge.
-[[nodiscard]] QVector<CaptureTab> captureTabLayout(const QRect &bounds);
+/// A non-zero `cutout` splits the strip around the camera housing.
+[[nodiscard]] QVector<CaptureTab>
+captureTabLayout(const QRect &bounds, const TopCutout &cutout = {});
 /// Index of the tab under `position`, or -1.
 [[nodiscard]] int captureTabAt(const QVector<CaptureTab> &tabs,
                                const QPointF &position);

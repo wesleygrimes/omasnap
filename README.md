@@ -292,6 +292,16 @@ image = ~/Pictures/backdrops/desk.jpg
 # automatic window-gray mat; `off` stays transparent. `custom` only takes
 # effect once `image` above loads successfully.
 default = custom
+
+[display]
+# Top cutout dodge for notched MacBook panels (Asahi / show_notch).
+# auto (default): apply built-in sizes on known 14"/16" modes only.
+# on: always use notch_width / notch_height (built-in defaults fill blanks).
+# off: keep the centered chrome layout.
+notch = auto
+# Logical pixels. Optional; auto supplies defaults on known panels.
+# notch_width = 185
+# notch_height = 37
 ```
 
 Filename tokens:

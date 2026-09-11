@@ -181,8 +181,9 @@ struct ScrollCapturePanel::Worker {
 
 ScrollCapturePanel::ScrollCapturePanel(MonitorInfo monitor,
                                        LayerShellQt::Window *layer,
-                                       QWidget *parent)
-    : QWidget(parent), monitor_(std::move(monitor)), layer_(layer) {
+                                       TopCutout cutout, QWidget *parent)
+    : QWidget(parent), monitor_(std::move(monitor)), layer_(layer),
+      topCutout_(std::move(cutout)) {
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
   setAttribute(Qt::WA_TranslucentBackground);
@@ -257,7 +258,7 @@ void ScrollCapturePanel::postStatus(const QString &status, bool warning) {
 
 QVector<QRect> ScrollCapturePanel::chromeRects() const {
   QVector<QRect> rects;
-  for (const CaptureTab &tab : captureTabLayout(rect()))
+  for (const CaptureTab &tab : tabItems())
     rects.push_back(tab.rect.toAlignedRect());
   if (phase_ == Phase::Selected) {
     for (int index = 0; index < kModeButtonCount; ++index)
@@ -273,6 +274,10 @@ QVector<QRect> ScrollCapturePanel::chromeRects() const {
   if (autoStalled_)
     rects.push_back(continueButtonRect());
   return rects;
+}
+
+QVector<CaptureTab> ScrollCapturePanel::tabItems() const {
+  return captureTabLayout(rect(), topCutout_);
 }
 
 void ScrollCapturePanel::applyInputRegion() {
@@ -1100,8 +1105,7 @@ void ScrollCapturePanel::paintEvent(QPaintEvent *) {
   }
   // The same tab strip every overlay wears, with this kind lit. The other
   // tabs leave for the area overlay in that mode.
-  drawCaptureTabs(painter, captureTabLayout(rect()), CaptureKind::Scroll,
-                  cursor_);
+  drawCaptureTabs(painter, tabItems(), CaptureKind::Scroll, cursor_);
   drawStatusPill(painter, rect(), status_);
 }
 
@@ -1144,9 +1148,8 @@ void ScrollCapturePanel::mousePressEvent(QMouseEvent *event) {
   }
   if (event->button() != Qt::LeftButton)
     return;
-  if (const int tab = captureTabAt(captureTabLayout(rect()), event->position());
-      tab >= 0) {
-    const CaptureKind kind = captureTabLayout(rect()).at(tab).kind;
+  if (const int tab = captureTabAt(tabItems(), event->position()); tab >= 0) {
+    const CaptureKind kind = tabItems().at(tab).kind;
     if (kind != CaptureKind::Scroll) {
       stopWorker();
       phase_ = Phase::Finished;
